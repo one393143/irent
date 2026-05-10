@@ -20,6 +20,7 @@ const myNameDisplay = document.getElementById('my-name-display');
 let currentState = 'waiting_to_open';
 let myNickname = '';
 let myPlayerId = '';
+let gameStarted = false;
 
 // 切換畫面
 function showView(viewId) {
@@ -63,7 +64,10 @@ function handleStateChange(state) {
     } else if (state === 'playing') {
         if (myPlayerId) {
             showView('game');
-            startGame();
+            if (!gameStarted) {
+                startGame();
+                gameStarted = true;
+            }
         } else {
             statusText.innerText = '遊戲已開始，無法加入';
             nicknameInput.disabled = true;
