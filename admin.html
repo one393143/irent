@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>iRent 主持人後台</title>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="css/style.css">
+    <!-- QR Code 生成庫 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+</head>
+<body class="admin-body">
+    <div class="background-container">
+        <img src="img/map.jpg" alt="background" class="bg-image">
+        <div class="overlay" style="background: linear-gradient(135deg, rgba(0,0,0,0.6) 0%, rgba(0,0,0,0.8) 100%);"></div>
+    </div>
+    
+    <div class="admin-container">
+        <div class="admin-header">
+            <img src="img/logo.png" alt="iRent Logo" class="logo small-logo">
+            <h2>遊戲控制台</h2>
+        </div>
+        
+        <div class="admin-content">
+            <!-- 控制面板 -->
+            <div class="control-panel glass-panel">
+                <h3>遊戲狀態控制</h3>
+                <div class="status-indicator">當前狀態: <span id="current-status" class="status-badge waiting">連線中...</span></div>
+                
+                <div class="action-buttons">
+                    <button id="btn-open-join" class="btn-primary" disabled>開放加入</button>
+                    <button id="btn-start-game" class="btn-success" disabled>開始遊戲</button>
+                    <button id="btn-reset" class="btn-danger" disabled>重置遊戲</button>
+                </div>
+                
+                <div class="qr-section">
+                    <h3>掃描加入遊戲</h3>
+                    <p>請玩家掃描下方 QR Code 進入遊戲</p>
+                    <div id="qrcode"></div>
+                    <p class="url-display" id="url-display">讀取中...</p>
+                </div>
+            </div>
+
+            <!-- 玩家名單 -->
+            <div class="players-panel glass-panel">
+                <h3>已加入玩家 (<span id="admin-player-count">0</span>)</h3>
+                <div class="players-grid" id="admin-players-list">
+                    <!-- 動態加入玩家卡片 -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 匯入 Firebase SDK 模組與主程式 -->
+    <script type="module" src="js/admin.js"></script>
+</body>
+</html>
