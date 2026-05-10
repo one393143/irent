@@ -3,96 +3,136 @@ export function startGame() {
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     
-    // 動態設定 Canvas 尺寸
-    const containerWidth = canvas.parentElement.clientWidth || window.innerWidth * 0.9;
-    const size = Math.min(containerWidth, 600); // 最大不超過 600px
-    canvas.width = size;
-    canvas.height = size;
+    // 設定 Canvas 尺寸 (10x15 網格)
+    const GRID_W = 10;
+    const GRID_H = 15;
+    const TS = 30; // 每格 30px
+    canvas.width = GRID_W * TS;
+    canvas.height = GRID_H * TS;
     
-    const GRID = 32;
-    const TS = size / GRID; // Tile Size (每個網格的像素大小)
-    
-    // 遊戲狀態變數
+    // 遊戲狀態
     let isGameOver = false;
-    let timeAlive = 0;
-    let deadCount = 0;
-    let freeDispatchers = 3;
+    let timer = 60;
+    let revenue = 0;
+    let satisfaction = 100;
+    let freeDispatchers = 2;
+    const maxDispatchers = 2;
+    
     let lastTime = Date.now();
-    let startTime = Date.now();
+    let userSpawnTimer = Math.random() * 2 + 4; // 4-6 秒
     
-    const uiTime = document.getElementById('game-time');
-    const uiDead = document.getElementById('dead-scooters');
-    const uiFreeDispatchers = document.getElementById('free-dispatchers');
+    // DOM 元素
+    const uiTimer = document.getElementById('game-timer');
+    const uiRevenue = document.getElementById('game-revenue');
+    const uiSatisfaction = document.getElementById('game-satisfaction');
+    const uiDispatchers = document.getElementById('free-dispatchers');
+    const modal = document.getElementById('settlement-modal');
     
-    // 地圖設施
-    const chargingStations = [
-        { x: 16, y: 16 }, // 市中心
-        { x: 5, y: 25 },  // 住宅區
-        { x: 25, y: 5 }   // 商業區
+    // 初始化 UI
+    uiTimer.innerText = timer;
+    uiRevenue.innerText = `$${revenue}`;
+    uiSatisfaction.innerText = `${satisfaction}%`;
+    uiDispatchers.innerText = `${freeDispatchers}/${maxDispatchers}`;
+    modal.style.display = 'none';
+    
+    // 充電站位置
+    const stations = [
+        { x: 0, y: 0 },
+        { x: 9, y: 14 }
     ];
     
-    // 初始化 5 台機車
+    // 初始化 4 台機車
     let scooters = [];
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 4; i++) {
         scooters.push({
             id: i,
-            x: Math.floor(Math.random() * (GRID - 4)) + 2, // 避免太靠邊緣
-            y: Math.floor(Math.random() * (GRID - 4)) + 2,
+            x: Math.floor(Math.random() * GRID_W),
+            y: Math.floor(Math.random() * GRID_H),
+            battery: Math.floor(Math.random() * 51) + 50, // 50-100%
+            state: 'idle', // idle, rented, dead, swapping
             targetX: -1,
             targetY: -1,
-            battery: 100,
-            state: 'idle', // idle, moving, dead
-            waitTimer: Math.random() * 2 // 隨機等待 0-2 秒後開始移動
+            deadTimer: 0,
+            path: [],
+            currentPathIndex: 0
         });
     }
     
-    let activeDispatchers = [];
+    let users = [];
+    let dispatchers = [];
     
-    // 點擊事件：調度換電
+    // 輔助函數：計算曼哈頓距離
+    function getDistance(x1, y1, x2, y2) {
+        return Math.abs(x1 - x2) + Math.abs(y1 - y2);
+    }
+    
+    // 輔助函數：生成直線路徑 (只走正交方向)
+    function generatePath(startX, startY, endX, endY) {
+        let path = [];
+        let currX = startX;
+        let currY = startY;
+        
+        // 先走 X 軸
+        while (currX !== endX) {
+            currX += (endX > currX) ? 1 : -1;
+            path.push({ x: currX, y: currY });
+        }
+        // 再走 Y 軸
+        while (currY !== endY) {
+            currY += (endY > currY) ? 1 : -1;
+            path.push({ x: currX, y: currY });
+        }
+        return path;
+    }
+    
+    // 點擊事件
     canvas.addEventListener('click', (e) => {
         if (isGameOver) return;
         const rect = canvas.getBoundingClientRect();
-        // 考慮到 canvas 在 css 中的 scale 或縮放，將點擊座標轉為 canvas 內部座標
-        const scaleX = canvas.width / rect.width;
-        const scaleY = canvas.height / rect.height;
-        const clickX = (e.clientX - rect.left) * scaleX;
-        const clickY = (e.clientY - rect.top) * scaleY;
+        const clickX = e.clientX - rect.left;
+        const clickY = e.clientY - rect.top;
         
-        // 尋找被點擊的機車 (判定範圍給大一點，方便手機點擊)
+        const gridX = Math.floor(clickX / TS);
+        const gridY = Math.floor(clickY / TS);
+        
+        // 尋找被點擊的機車
         let clickedScooter = null;
-        const hitRadius = TS * 3; 
         for (let s of scooters) {
-            let sx = s.x * TS;
-            let sy = s.y * TS;
-            if (Math.abs(clickX - sx) < hitRadius && Math.abs(clickY - sy) < hitRadius) {
+            if (s.x === gridX && s.y === gridY) {
                 clickedScooter = s;
                 break;
             }
         }
         
-        // 若點到機車，且有空閒調度員，且機車電量未滿
-        if (clickedScooter && freeDispatchers > 0 && clickedScooter.battery < 100) {
-            // 找出最近的充電站派人
-            let nearestStation = chargingStations[0];
-            let minDist = 9999;
-            for (let cs of chargingStations) {
-                let dist = Math.abs(cs.x - clickedScooter.x) + Math.abs(cs.y - clickedScooter.y);
-                if (dist < minDist) {
-                    minDist = dist;
-                    nearestStation = cs;
+        if (clickedScooter && (clickedScooter.state === 'idle' || clickedScooter.state === 'dead')) {
+            if (freeDispatchers > 0) {
+                // 找出最近的換電站
+                let nearestStation = stations[0];
+                let minDist = getDistance(clickedScooter.x, clickedScooter.y, nearestStation.x, nearestStation.y);
+                
+                for (let st of stations) {
+                    let dist = getDistance(clickedScooter.x, clickedScooter.y, st.x, st.y);
+                    if (dist < minDist) {
+                        minDist = dist;
+                        nearestStation = st;
+                    }
                 }
+                
+                freeDispatchers--;
+                uiDispatchers.innerText = `${freeDispatchers}/${maxDispatchers}`;
+                
+                // 建立調度員
+                dispatchers.push({
+                    x: nearestStation.x,
+                    y: nearestStation.y,
+                    targetScooter: clickedScooter,
+                    state: 'going', // going, returning, charging
+                    path: generatePath(nearestStation.x, nearestStation.y, clickedScooter.x, clickedScooter.y),
+                    currentPathIndex: 0,
+                    timer: 0,
+                    station: nearestStation
+                });
             }
-            
-            freeDispatchers--;
-            uiFreeDispatchers.innerText = freeDispatchers;
-            
-            activeDispatchers.push({
-                x: nearestStation.x,
-                y: nearestStation.y,
-                targetScooter: clickedScooter,
-                state: 'going', // going 派往機車, returning 返回充電站
-                station: nearestStation
-            });
         }
     });
     
@@ -100,229 +140,342 @@ export function startGame() {
     function update(dt) {
         if (isGameOver) return;
         
-        // 更新存活時間
-        timeAlive = Math.floor((Date.now() - startTime) / 1000);
-        uiTime.innerText = timeAlive;
+        // 倒數計時
+        timer -= dt;
+        if (timer <= 0) {
+            timer = 0;
+            endGame();
+        }
+        uiTimer.innerText = Math.ceil(timer);
         
-        // 機車邏輯
-        deadCount = 0;
-        for (let s of scooters) {
-            if (s.battery <= 0) {
-                s.battery = 0;
-                if (s.state !== 'dead') s.state = 'dead';
-                deadCount++;
-                continue;
-            }
+        // 使用者生成邏輯
+        userSpawnTimer -= dt;
+        if (userSpawnTimer <= 0) {
+            userSpawnTimer = Math.random() * 2 + 4; // 4-6 秒
             
-            // 待命中 -> 隨機啟動一趟租借
-            if (s.state === 'idle') {
-                s.waitTimer -= dt;
-                if (s.waitTimer <= 0) {
-                    s.state = 'moving';
-                    s.targetX = Math.floor(Math.random() * (GRID - 2)) + 1;
-                    s.targetY = Math.floor(Math.random() * (GRID - 2)) + 1;
+            // 隨機在邊緣生成
+            let edge = Math.floor(Math.random() * 4);
+            let ux = 0, uy = 0;
+            if (edge === 0) { ux = Math.floor(Math.random() * GRID_W); uy = 0; }
+            else if (edge === 1) { ux = Math.floor(Math.random() * GRID_W); uy = GRID_H - 1; }
+            else if (edge === 2) { ux = 0; uy = Math.floor(Math.random() * GRID_H); }
+            else { ux = GRID_W - 1; uy = Math.floor(Math.random() * GRID_H); }
+            
+            users.push({
+                x: ux,
+                y: uy,
+                targetScooter: null,
+                state: 'seeking', // seeking, walking, angry
+                path: [],
+                currentPathIndex: 0,
+                angryTimer: 0
+            });
+        }
+        
+        // 使用者 AI
+        for (let i = users.length - 1; i >= 0; i--) {
+            let u = users[i];
+            
+            if (u.state === 'seeking') {
+                // 找最近的閒置機車
+                let bestScooter = null;
+                let minDist = 9999;
+                for (let s of scooters) {
+                    if (s.state === 'idle') {
+                        let dist = getDistance(u.x, u.y, s.x, s.y);
+                        if (dist < minDist) {
+                            minDist = dist;
+                            bestScooter = s;
+                        }
+                    }
                 }
-            } 
-            // 移動中 (被人租走)
-            else if (s.state === 'moving') {
-                let speed = 4; // 每秒移動幾格
-                let moveAmount = speed * dt;
                 
-                let dx = s.targetX - s.x;
-                let dy = s.targetY - s.y;
-                let dist = Math.sqrt(dx*dx + dy*dy);
-                
-                if (dist < moveAmount) {
-                    // 到達目的地
-                    s.x = s.targetX;
-                    s.y = s.targetY;
-                    s.state = 'idle';
-                    s.waitTimer = Math.random() * 4 + 2; // 抵達後閒置 2-6 秒
+                if (bestScooter) {
+                    u.targetScooter = bestScooter;
+                    u.state = 'walking';
+                    u.path = generatePath(u.x, u.y, bestScooter.x, bestScooter.y);
+                    u.currentPathIndex = 0;
+                    // 機車暫時鎖定？規格沒說，但為了避免搶車，我們在抵達時才變 Rented
                 } else {
-                    // 沿直線移動
-                    s.x += (dx/dist) * moveAmount;
-                    s.y += (dy/dist) * moveAmount;
+                    // 客訴機制
+                    u.state = 'angry';
+                    u.angryTimer = 1; // 顯示生氣表情 1 秒
+                    satisfaction = Math.max(0, satisfaction - 5);
+                    uiSatisfaction.innerText = `${satisfaction}%`;
                 }
-                
-                // 行駛中耗電：每秒掉 4%
-                s.battery -= 4 * dt; 
-            }
-            // 就算閒置也會微幅耗電
-            if (s.state === 'idle' && s.battery > 0) {
-                s.battery -= 0.5 * dt;
+            } else if (u.state === 'walking') {
+                u.angryTimer += dt;
+                if (u.angryTimer >= 0.2) { // 模擬移動速度，0.2 秒走一格
+                    u.angryTimer = 0;
+                    if (u.currentPathIndex < u.path.length) {
+                        let step = u.path[u.currentPathIndex];
+                        u.x = step.x;
+                        u.y = step.y;
+                        u.currentPathIndex++;
+                    } else {
+                        // 抵達機車
+                        if (u.targetScooter && u.targetScooter.state === 'idle') {
+                            u.targetScooter.state = 'rented';
+                            u.targetScooter.targetX = Math.floor(Math.random() * GRID_W);
+                            u.targetScooter.targetY = Math.floor(Math.random() * GRID_H);
+                            u.targetScooter.path = generatePath(u.targetScooter.x, u.targetScooter.y, u.targetScooter.targetX, u.targetScooter.targetY);
+                            u.targetScooter.currentPathIndex = 0;
+                        }
+                        users.splice(i, 1); // 使用者消失
+                    }
+                }
+            } else if (u.state === 'angry') {
+                u.angryTimer -= dt;
+                if (u.angryTimer <= 0) {
+                    users.splice(i, 1);
+                }
             }
         }
         
-        uiDead.innerText = deadCount;
-        
-        // 失敗條件判定：3 台車沒電
-        if (deadCount >= 3) {
-            isGameOver = true;
-            setTimeout(() => {
-                alert(`調度失敗！太多車輛沒電了。\n您的城市維持運作了：${timeAlive} 秒！`);
-                // 重整頁面或回主畫面
-            }, 500);
+        // 機車與調度員邏輯
+        for (let s of scooters) {
+            if (s.state === 'rented') {
+                s.deadTimer += dt;
+                if (s.deadTimer >= 0.2) { // 0.2 秒走一格
+                    s.deadTimer = 0;
+                    if (s.currentPathIndex < s.path.length) {
+                        let step = s.path[s.currentPathIndex];
+                        s.x = step.x;
+                        s.y = step.y;
+                        s.currentPathIndex++;
+                        
+                        revenue += 10;
+                        s.battery -= 5;
+                        uiRevenue.innerText = `$${revenue}`;
+                        
+                        if (s.battery <= 0) {
+                            s.battery = 0;
+                            s.state = 'dead';
+                        }
+                    } else {
+                        s.state = 'idle';
+                    }
+                }
+            } else if (s.state === 'dead') {
+                s.deadTimer += dt;
+                if (s.deadTimer >= 3) {
+                    s.deadTimer = 0;
+                    satisfaction = Math.max(0, satisfaction - 2);
+                    uiSatisfaction.innerText = `${satisfaction}%`;
+                }
+            }
         }
         
         // 調度員邏輯
-        for (let i = activeDispatchers.length - 1; i >= 0; i--) {
-            let d = activeDispatchers[i];
-            let speed = 12; // 調度員騎乘特殊車輛，速度比一般車快得多
-            let moveAmount = speed * dt;
+        for (let i = dispatchers.length - 1; i >= 0; i--) {
+            let d = dispatchers[i];
             
             if (d.state === 'going') {
-                let targetX = d.targetScooter.x;
-                let targetY = d.targetScooter.y;
-                let dx = targetX - d.x;
-                let dy = targetY - d.y;
-                let dist = Math.sqrt(dx*dx + dy*dy);
-                
-                if (dist < moveAmount) {
-                    // 到達目標機車，幫機車充滿電！
-                    d.x = targetX;
-                    d.y = targetY;
-                    d.targetScooter.battery = 100;
-                    if (d.targetScooter.state === 'dead') {
-                        // 復活機車
-                        d.targetScooter.state = 'idle';
-                        d.targetScooter.waitTimer = 1;
+                d.timer += dt;
+                if (d.timer >= 0.15) { // 調度員稍微快一點，0.15 秒一格
+                    d.timer = 0;
+                    if (d.currentPathIndex < d.path.length) {
+                        let step = d.path[d.currentPathIndex];
+                        d.x = step.x;
+                        d.y = step.y;
+                        d.currentPathIndex++;
+                    } else {
+                        // 抵達機車
+                        d.targetScooter.state = 'swapping';
+                        d.state = 'returning';
+                        d.path = generatePath(d.x, d.y, d.station.x, d.station.y);
+                        d.currentPathIndex = 0;
                     }
-                    d.state = 'returning'; // 開始返回
-                } else {
-                    d.x += (dx/dist) * moveAmount;
-                    d.y += (dy/dist) * moveAmount;
                 }
             } else if (d.state === 'returning') {
-                let targetX = d.station.x;
-                let targetY = d.station.y;
-                let dx = targetX - d.x;
-                let dy = targetY - d.y;
-                let dist = Math.sqrt(dx*dx + dy*dy);
-                
-                if (dist < moveAmount) {
-                    // 成功返回充電站，歸隊待命
-                    activeDispatchers.splice(i, 1);
+                d.timer += dt;
+                if (d.timer >= 0.15) {
+                    d.timer = 0;
+                    if (d.currentPathIndex < d.path.length) {
+                        let step = d.path[d.currentPathIndex];
+                        d.x = step.x;
+                        d.y = step.y;
+                        d.targetScooter.x = step.x;
+                        d.targetScooter.y = step.y;
+                        d.currentPathIndex++;
+                    } else {
+                        // 抵達換電站
+                        d.state = 'charging';
+                        d.timer = 2; // 充電 2 秒
+                    }
+                }
+            } else if (d.state === 'charging') {
+                d.timer -= dt;
+                if (d.timer <= 0) {
+                    // 完成充電
+                    d.targetScooter.battery = 100;
+                    d.targetScooter.state = 'idle';
+                    
+                    // 隨機放在旁邊一格
+                    const adj = [{x:1,y:0},{x:-1,y:0},{x:0,y:1},{x:0,y:-1}];
+                    let placed = false;
+                    for (let a of adj) {
+                        let nx = d.station.x + a.x;
+                        let ny = d.station.y + a.y;
+                        if (nx >= 0 && nx < GRID_W && ny >= 0 && ny < GRID_H) {
+                            d.targetScooter.x = nx;
+                            d.targetScooter.y = ny;
+                            placed = true;
+                            break;
+                        }
+                    }
+                    if (!placed) {
+                        d.targetScooter.x = d.station.x;
+                        d.targetScooter.y = d.station.y;
+                    }
+                    
                     freeDispatchers++;
-                    uiFreeDispatchers.innerText = freeDispatchers;
-                } else {
-                    d.x += (dx/dist) * moveAmount;
-                    d.y += (dy/dist) * moveAmount;
+                    uiDispatchers.innerText = `${freeDispatchers}/${maxDispatchers}`;
+                    dispatchers.splice(i, 1);
                 }
             }
         }
     }
     
-    // 繪製畫面
+    // 繪製邏輯
     function draw() {
-        ctx.clearRect(0, 0, size, size);
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
         
-        // ==== 繪製分區背景顏色 ====
-        // 學區 (左上)
-        ctx.fillStyle = "rgba(100, 150, 255, 0.25)";
-        ctx.fillRect(0, 0, 16*TS, 16*TS);
-        
-        // 商業區 (右上)
-        ctx.fillStyle = "rgba(255, 100, 100, 0.25)";
-        ctx.fillRect(16*TS, 0, 16*TS, 16*TS);
-        
-        // 住宅區 (左下)
-        ctx.fillStyle = "rgba(100, 255, 100, 0.25)";
-        ctx.fillRect(0, 16*TS, 16*TS, 16*TS);
-        
-        // (右下可保留為預設或工業區)
-        ctx.fillStyle = "rgba(200, 200, 200, 0.25)";
-        ctx.fillRect(16*TS, 16*TS, 16*TS, 16*TS);
-        
-        // 畫格線 (代表城市道路)
-        ctx.strokeStyle = "rgba(255, 255, 255, 0.6)";
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        for (let i = 0; i <= GRID; i++) {
-            ctx.moveTo(i*TS, 0); ctx.lineTo(i*TS, size);
-            ctx.moveTo(0, i*TS); ctx.lineTo(size, i*TS);
-        }
-        ctx.stroke();
-        
-        // ==== 繪製特殊地標 ====
-        // 捷運站
-        ctx.fillStyle = "purple";
-        [ [8,8], [24,24] ].forEach(pos => {
-            ctx.beginPath();
-            ctx.arc(pos[0]*TS, pos[1]*TS, TS*2, 0, Math.PI*2);
-            ctx.fill();
-            ctx.fillStyle = "#fff";
-            ctx.font = `${TS*1.2}px Arial`;
-            ctx.textAlign = "center";
-            ctx.textBaseline = "middle";
-            ctx.fillText("🚇", pos[0]*TS, pos[1]*TS);
-            ctx.fillStyle = "purple";
-        });
-        
-        // 充電站
-        chargingStations.forEach(cs => {
-            ctx.fillStyle = "rgba(255, 165, 0, 0.8)"; // 橘黃色
-            ctx.fillRect(cs.x*TS - TS*1.5, cs.y*TS - TS*1.5, TS*3, TS*3);
-            ctx.fillStyle = "#fff";
-            ctx.font = `${TS*1.5}px Arial`;
-            ctx.textAlign = "center";
-            ctx.textBaseline = "middle";
-            ctx.fillText("⚡", cs.x*TS, cs.y*TS);
-        });
-        
-        // ==== 繪製調度員 ====
-        for (let d of activeDispatchers) {
-            ctx.fillStyle = "rgba(0, 0, 255, 0.8)";
-            ctx.beginPath();
-            ctx.arc(d.x*TS, d.y*TS, TS*1.2, 0, Math.PI*2);
-            ctx.fill();
-            ctx.fillStyle = "#fff";
-            ctx.font = `${TS*1.5}px Arial`;
-            ctx.fillText("👷", d.x*TS, d.y*TS);
+        // 1. 畫背景
+        for (let x = 0; x < GRID_W; x++) {
+            for (let y = 0; y < GRID_H; y++) {
+                // 判斷是否靠近換電站 (3x3)
+                let isOrange = false;
+                for (let s of stations) {
+                    if (Math.abs(x - s.x) <= 1 && Math.abs(y - s.y) <= 1) {
+                        isOrange = true;
+                        break;
+                    }
+                }
+                
+                ctx.fillStyle = isOrange ? "rgba(255, 165, 0, 0.2)" : "rgba(144, 238, 144, 0.2)";
+                ctx.fillRect(x * TS, y * TS, TS, TS);
+                
+                ctx.strokeStyle = "rgba(200, 200, 200, 0.5)";
+                ctx.strokeRect(x * TS, y * TS, TS, TS);
+            }
         }
         
-        // ==== 繪製機車 ====
+        // 2. 畫換電站
+        for (let s of stations) {
+            ctx.fillStyle = "rgba(255, 165, 0, 0.8)";
+            ctx.fillRect(s.x * TS, s.y * TS, TS, TS);
+            ctx.fillStyle = "#fff";
+            ctx.font = `${TS*0.8}px Arial`;
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            ctx.fillText("⚡", s.x * TS + TS/2, s.y * TS + TS/2);
+        }
+        
+        // 3. 畫使用者
+        for (let u of users) {
+            ctx.font = `${TS*0.8}px Arial`;
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            if (u.state === 'angry') {
+                ctx.fillText("😡", u.x * TS + TS/2, u.y * TS + TS/2);
+            } else {
+                ctx.fillText("👤", u.x * TS + TS/2, u.y * TS + TS/2);
+            }
+        }
+        
+        // 4. 畫機車
         for (let s of scooters) {
-            // 用 Emoji 畫車，並根據狀態加底色
-            ctx.fillStyle = s.state === 'dead' ? "rgba(100,100,100,0.8)" : "rgba(0,166,90,0.8)";
+            let text = "🛵";
+            if (s.state === 'dead') {
+                // 閃爍紅光
+                if (Math.floor(Date.now() / 300) % 2 === 0) {
+                    ctx.fillStyle = "rgba(255, 0, 0, 0.5)";
+                    ctx.fillRect(s.x * TS, s.y * TS, TS, TS);
+                }
+            }
+            
+            ctx.font = `${TS*0.8}px Arial`;
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            ctx.fillText(text, s.x * TS + TS/2, s.y * TS + TS/2);
+            
+            // 電量條
+            const barW = TS * 0.8;
+            const barH = 4;
+            const barX = s.x * TS + (TS - barW)/2;
+            const barY = s.y * TS + 2;
+            
+            ctx.fillStyle = "#ccc";
+            ctx.fillRect(barX, barY, barW, barH);
+            ctx.fillStyle = s.battery > 20 ? "lime" : "red";
+            ctx.fillRect(barX, barY, barW * (s.battery/100), barH);
+            
+            // 狀態顏色圈
             ctx.beginPath();
-            ctx.arc(s.x*TS, s.y*TS, TS*1.5, 0, Math.PI*2);
+            ctx.arc(s.x * TS + TS - 5, s.y * TS + 5, 4, 0, Math.PI*2);
+            if (s.state === 'idle') ctx.fillStyle = "green";
+            else if (s.state === 'rented') ctx.fillStyle = "blue";
+            else if (s.state === 'dead') ctx.fillStyle = "red";
+            else if (s.state === 'swapping') ctx.fillStyle = "yellow";
             ctx.fill();
+        }
+        
+        // 5. 畫調度員
+        for (let d of dispatchers) {
+            ctx.font = `${TS*0.8}px Arial`;
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            ctx.fillText("👷", d.x * TS + TS/2, d.y * TS + TS/2);
             
-            ctx.font = `${TS*1.5}px Arial`;
-            ctx.fillText("🛵", s.x*TS, s.y*TS);
-            
-            // 繪製電量條
-            const barWidth = TS * 3;
-            const barHeight = TS * 0.5;
-            const barX = s.x*TS - barWidth/2;
-            const barY = s.y*TS - TS*2;
-            
-            ctx.fillStyle = "red";
-            ctx.fillRect(barX, barY, barWidth, barHeight);
-            
-            // 根據電量變色
-            if (s.battery > 50) ctx.fillStyle = "lime";
-            else if (s.battery > 20) ctx.fillStyle = "yellow";
-            else ctx.fillStyle = "orange";
-            
-            ctx.fillRect(barX, barY, barWidth * (Math.max(0, s.battery)/100), barHeight);
+            if (d.state === 'charging') {
+                // 充電閃爍
+                if (Math.floor(Date.now() / 200) % 2 === 0) {
+                    ctx.fillStyle = "rgba(0, 255, 255, 0.5)";
+                    ctx.fillRect(d.x * TS, d.y * TS, TS, TS);
+                }
+            }
         }
     }
     
-    // 主迴圈
+    function endGame() {
+        isGameOver = true;
+        document.getElementById('final-revenue').innerText = `$${revenue}`;
+        document.getElementById('final-satisfaction').innerText = `${satisfaction}%`;
+        
+        const evalText = document.getElementById('evaluation-text');
+        if (satisfaction < 60) {
+            evalText.innerText = "客訴爆炸！您引發了公關危機！";
+            evalText.style.color = "red";
+        } else if (satisfaction >= 60 && revenue > 1000) {
+            evalText.innerText = "完美調度大師！利潤與服務雙贏！";
+            evalText.style.color = "gold";
+        } else {
+            evalText.innerText = "中規中矩的營運長，還有進步空間。";
+            evalText.style.color = "black";
+        }
+        
+        modal.style.display = 'block';
+    }
+    
+    // 重新挑戰按鈕
+    document.getElementById('restart-btn').onclick = () => {
+        startGame();
+    };
+    
+    // 遊戲主迴圈
     function loop() {
+        let now = Date.now();
+        let dt = (now - lastTime) / 1000;
+        lastTime = now;
+        
+        update(dt);
+        draw();
+        
         if (!isGameOver) {
-            let now = Date.now();
-            let dt = (now - lastTime) / 1000; // 轉換為秒
-            lastTime = now;
-            
-            update(dt);
-            draw();
-            
             requestAnimationFrame(loop);
         }
     }
     
-    // 啟動迴圈
     requestAnimationFrame(loop);
 }
