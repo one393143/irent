@@ -28,12 +28,18 @@ export function startGame() {
     const uiDispatchers = document.getElementById('free-dispatchers');
     const modal = document.getElementById('settlement-modal');
     
+    // 防呆：如果找不到 DOM 元素，不執行遊戲以免報錯
+    if (!uiTimer || !uiRevenue || !uiSatisfaction || !uiDispatchers) {
+        console.error("找不到計分板元素，遊戲未啟動。請確認 index.html 是否包含對應的 ID。");
+        return;
+    }
+    
     // 初始化 UI
     uiTimer.innerText = timer;
     uiRevenue.innerText = `$${revenue}`;
     uiSatisfaction.innerText = `${satisfaction}%`;
     uiDispatchers.innerText = `${freeDispatchers}/${maxDispatchers}`;
-    modal.style.display = 'none';
+    if (modal) modal.style.display = 'none';
     
     // 充電站位置
     const stations = [
@@ -146,7 +152,7 @@ export function startGame() {
             timer = 0;
             endGame();
         }
-        uiTimer.innerText = Math.ceil(timer);
+        if (uiTimer) uiTimer.innerText = Math.ceil(timer);
         
         // 使用者生成邏輯
         userSpawnTimer -= dt;
@@ -195,13 +201,12 @@ export function startGame() {
                     u.state = 'walking';
                     u.path = generatePath(u.x, u.y, bestScooter.x, bestScooter.y);
                     u.currentPathIndex = 0;
-                    // 機車暫時鎖定？規格沒說，但為了避免搶車，我們在抵達時才變 Rented
                 } else {
                     // 客訴機制
                     u.state = 'angry';
                     u.angryTimer = 1; // 顯示生氣表情 1 秒
                     satisfaction = Math.max(0, satisfaction - 5);
-                    uiSatisfaction.innerText = `${satisfaction}%`;
+                    if (uiSatisfaction) uiSatisfaction.innerText = `${satisfaction}%`;
                 }
             } else if (u.state === 'walking') {
                 u.angryTimer += dt;
@@ -246,7 +251,7 @@ export function startGame() {
                         
                         revenue += 10;
                         s.battery -= 5;
-                        uiRevenue.innerText = `$${revenue}`;
+                        if (uiRevenue) uiRevenue.innerText = `$${revenue}`;
                         
                         if (s.battery <= 0) {
                             s.battery = 0;
@@ -261,7 +266,7 @@ export function startGame() {
                 if (s.deadTimer >= 3) {
                     s.deadTimer = 0;
                     satisfaction = Math.max(0, satisfaction - 2);
-                    uiSatisfaction.innerText = `${satisfaction}%`;
+                    if (uiSatisfaction) uiSatisfaction.innerText = `${satisfaction}%`;
                 }
             }
         }
@@ -330,7 +335,7 @@ export function startGame() {
                     }
                     
                     freeDispatchers++;
-                    uiDispatchers.innerText = `${freeDispatchers}/${maxDispatchers}`;
+                    if (uiDispatchers) uiDispatchers.innerText = `${freeDispatchers}/${maxDispatchers}`;
                     dispatchers.splice(i, 1);
                 }
             }
@@ -440,28 +445,35 @@ export function startGame() {
     
     function endGame() {
         isGameOver = true;
-        document.getElementById('final-revenue').innerText = `$${revenue}`;
-        document.getElementById('final-satisfaction').innerText = `${satisfaction}%`;
+        const finalRev = document.getElementById('final-revenue');
+        const finalSat = document.getElementById('final-satisfaction');
+        if (finalRev) finalRev.innerText = `$${revenue}`;
+        if (finalSat) finalSat.innerText = `${satisfaction}%`;
         
         const evalText = document.getElementById('evaluation-text');
-        if (satisfaction < 60) {
-            evalText.innerText = "客訴爆炸！您引發了公關危機！";
-            evalText.style.color = "red";
-        } else if (satisfaction >= 60 && revenue > 1000) {
-            evalText.innerText = "完美調度大師！利潤與服務雙贏！";
-            evalText.style.color = "gold";
-        } else {
-            evalText.innerText = "中規中矩的營運長，還有進步空間。";
-            evalText.style.color = "black";
+        if (evalText) {
+            if (satisfaction < 60) {
+                evalText.innerText = "客訴爆炸！您引發了公關危機！";
+                evalText.style.color = "red";
+            } else if (satisfaction >= 60 && revenue > 1000) {
+                evalText.innerText = "完美調度大師！利潤與服務雙贏！";
+                evalText.style.color = "gold";
+            } else {
+                evalText.innerText = "中規中矩的營運長，還有進步空間。";
+                evalText.style.color = "black";
+            }
         }
         
-        modal.style.display = 'block';
+        if (modal) modal.style.display = 'block';
     }
     
     // 重新挑戰按鈕
-    document.getElementById('restart-btn').onclick = () => {
-        startGame();
-    };
+    const restartBtn = document.getElementById('restart-btn');
+    if (restartBtn) {
+        restartBtn.onclick = () => {
+            startGame();
+        };
+    }
     
     // 遊戲主迴圈
     function loop() {
